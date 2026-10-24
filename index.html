@@ -146,8 +146,15 @@ body {
 .windmk svg { display: block; }
 .windmk span { font-size: 10px; font-weight: 600; line-height: 1; margin-top: -2px; }
 
-#status { font-size: 10px; color: var(--muted); text-align: right; }
+#statusBar { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+#status { font-size: 10px; color: var(--muted); }
 #status.err { color: var(--hot); }
+/* ホーム画面から開くとブラウザの再読み込みボタンがないので、自前で置く */
+#reload {
+  width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line);
+  background: var(--panel); color: var(--muted); font-size: 13px; line-height: 1;
+}
+#reload:active { color: var(--text); background: var(--line); }
 
 /* 全画面（横幅が広い）ときは 2 列 */
 @media (min-width: 760px) {
@@ -162,7 +169,7 @@ body {
   #chartBox { flex: 1; min-height: 0; }
   #radar { grid-area: radar; }
   #weekly { grid-area: weekly; }
-  #status { grid-area: status; }
+  #statusBar { grid-area: status; }
 }
 /* 縦が短いときは週間予報を減らしてレーダーの高さを確保する */
 @media (max-height: 760px) and (max-width: 759px) {
@@ -215,7 +222,7 @@ body {
     <table id="weekTable"></table>
   </section>
 
-  <div id="status">-</div>
+  <div id="statusBar"><span id="status">-</span><button id="reload" type="button" aria-label="再読み込み">↻</button></div>
 </div>
 
 <script>
@@ -320,12 +327,10 @@ function render(data) {
   $('todayMax').textContent = `${Math.round(d.temperature_2m_max[0])}°`;
   $('todayMin').textContent = `${Math.round(d.temperature_2m_min[0])}°`;
 
-  // 服装: 18時以降は明日の目安を出す
-  const hourNow = parseInt(c.time.slice(11, 13), 10);
-  const di = hourNow >= 18 ? 1 : 0;
-  const w = clothing(d.apparent_temperature_max[di], d.apparent_temperature_min[di],
-    d.precipitation_probability_max[di] ?? 0, d.wind_speed_10m_max[di]);
-  $('wearTitle').textContent = di ? '明日の服装の目安' : '今日の服装の目安';
+  // 服装: 日付が変わるまでは今日の目安を出す
+  const w = clothing(d.apparent_temperature_max[0], d.apparent_temperature_min[0],
+    d.precipitation_probability_max[0] ?? 0, d.wind_speed_10m_max[0]);
+  $('wearTitle').textContent = '今日の服装の目安';
   $('wearIcon').textContent = w.icon;
   $('wearMain').textContent = w.main;
   $('wearSub').textContent = w.sub;
@@ -783,6 +788,7 @@ async function keepAwake() {
 }
 document.addEventListener('visibilitychange', keepAwake);
 document.addEventListener('click', keepAwake);
+$('reload').addEventListener('click', () => location.reload());
 
 // 画面サイズが変わったらグラフを描き直す
 let resizeT;
