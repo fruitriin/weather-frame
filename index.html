@@ -275,20 +275,22 @@ function windDir(deg) {
   return dirs[Math.round(deg / 45) % 8];
 }
 
-// ---- 服装の目安（日中の最高体感温度を基準にする） ----
-function clothing(feelMax, feelMin, rainProb, windMax) {
+// ---- 服装の目安（朝 7〜9 時・夕方 18 時・日中の最高のうち、いちばん低い体感温度を基準にする） ----
+function clothing(feel, rainProb, windMax) {
   const levels = [
     [30, '🩳', 'ノースリーブ・半袖', '暑さ対策を。こまめに水分補給'],
-    [25, '👕', '半袖', '日中は半袖で過ごせる'],
-    [21, '👔', '薄手の長袖シャツ', '半袖だと朝晩は少し肌寒い'],
+    [25, '👕', '半袖', '半袖で過ごせる'],
+    [21, '👔', '薄手の長袖シャツ', '半袖だと少し肌寒い'],
     [17, '🧥', 'カーディガン・薄手の上着', '長袖に羽織るものを1枚'],
     [13, '🧶', 'セーター・ジャケット', 'ニットや厚手の上着が欲しい'],
     [8, '🧥', 'トレンチ・ウールコート', 'しっかりした上着が必要'],
     [-99, '🧣', 'ダウン・厚手のコート', 'マフラーや手袋もあると安心'],
   ];
-  const lv = levels.find((l) => feelMax >= l[0]);
-  const notes = [lv[3]];
-  if (feelMax - feelMin >= 8) notes.push(`朝晩は${Math.round(feelMin)}°まで下がる`);
+  const times = [['朝', feel.morning], ['夕', feel.evening], ['日中', feel.max]].filter(([, v]) => v != null);
+  const base = Math.min(...times.map(([, v]) => v));
+  const lv = levels.find((l) => base >= l[0]);
+  const notes = [times.map(([k, v]) => `${k}${Math.round(v)}°`).join(' '), lv[3]];
+  if (feel.max - base >= 6) notes.push('日中は気温が上がるので脱ぎ着しやすく');
   if (rainProb >= 50) notes.push('☂️ 傘を持って');
   else if (rainProb >= 30) notes.push('🌂 折りたたみ傘があると安心');
   if (windMax >= 10) notes.push('💨 風が強い');
@@ -328,7 +330,13 @@ function render(data) {
   $('todayMin').textContent = `${Math.round(d.temperature_2m_min[0])}°`;
 
   // 服装: 日付が変わるまでは今日の目安を出す
-  const w = clothing(d.apparent_temperature_max[0], d.apparent_temperature_min[0],
+  const feelAt = (hours) => {
+    const vals = hours.map((hh) => h.apparent_temperature[h.time.indexOf(`${d.time[0]}T${hh}:00`)])
+      .filter((v) => v != null);
+    return vals.length ? Math.min(...vals) : null;
+  };
+  const w = clothing(
+    { morning: feelAt(['07', '08', '09']), evening: feelAt(['18']), max: d.apparent_temperature_max[0] },
     d.precipitation_probability_max[0] ?? 0, d.wind_speed_10m_max[0]);
   $('wearTitle').textContent = '今日の服装の目安';
   $('wearIcon').textContent = w.icon;
