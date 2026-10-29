@@ -44,16 +44,23 @@ body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
   font-feature-settings: "tnum";
-  overflow: hidden;
+  overflow-x: hidden;
   -webkit-user-select: none;
   user-select: none;
 }
 #app {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px max(10px, env(safe-area-inset-bottom));
+}
+/* 時計からレーダーまでを 1 画面に収め、週間予報はその下にはみ出させる（スクロールで見る） */
+#screen {
   height: 100dvh;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: max(8px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom));
+  padding-top: max(8px, env(safe-area-inset-top));
 }
 .card {
   background: var(--panel);
@@ -72,11 +79,24 @@ body {
   justify-content: space-between;
 }
 
+/* 時計 */
+#clockCard { display: flex; align-items: center; gap: 14px; padding: 8px 14px; }
+#analog { flex: 0 0 auto; width: 96px; height: 96px; display: block; }
+#analog .face { fill: var(--bg); stroke: var(--line); stroke-width: 1.5; }
+#analog .tick { stroke: var(--muted); stroke-width: 1; }
+#analog .tick.major { stroke: var(--text); stroke-width: 2.5; }
+#analog .hand { stroke: var(--text); stroke-linecap: round; }
+#analog .sec { stroke: var(--temp); stroke-width: 1.2; }
+#analog .pin { fill: var(--temp); }
+#digital { flex: 1; min-width: 0; text-align: center; }
+#digital .hm { font-size: 52px; font-weight: 300; line-height: 1; letter-spacing: .02em; }
+#digital .hm small { font-size: 22px; color: var(--muted); margin-left: 2px; }
+#digital .date { font-size: 14px; color: var(--muted); margin-top: 6px; }
+
 /* 現在 */
 #now { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: center; }
 #now .place { grid-column: 1 / -1; display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
 #now .place b { color: var(--text); font-weight: 600; }
-#clock { font-size: 13px; color: var(--text); }
 #now .icon { font-size: 44px; line-height: 1; }
 #now .temp { font-size: 40px; font-weight: 300; line-height: 1; }
 #now .temp small { font-size: 18px; color: var(--muted); }
@@ -159,10 +179,13 @@ body {
 /* 全画面（横幅が広い）ときは 2 列 */
 @media (min-width: 760px) {
   #app {
-    display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto 1fr auto auto;
-    grid-template-areas: "now radar" "wear radar" "chart radar" "chart weekly" "status status";
+    height: 100dvh; padding-top: max(8px, env(safe-area-inset-top));
+    display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto auto 1fr auto auto;
+    grid-template-areas: "clock radar" "now radar" "wear radar" "chart radar" "chart weekly" "status status";
   }
-  #app > * { min-width: 0; } /* 横スクロールするグラフの幅で列が広がらないようにする */
+  #screen { display: contents; }
+  #app > *, #screen > * { min-width: 0; } /* 横スクロールするグラフの幅で列が広がらないようにする */
+  #clockCard { grid-area: clock; }
   #now { grid-area: now; }
   #wear { grid-area: wear; }
   #chart { grid-area: chart; display: flex; flex-direction: column; }
@@ -171,16 +194,25 @@ body {
   #weekly { grid-area: weekly; }
   #statusBar { grid-area: status; }
 }
-/* 縦が短いときは週間予報を減らしてレーダーの高さを確保する */
-@media (max-height: 760px) and (max-width: 759px) {
-  #weekly tr:nth-child(n+6) { display: none; }
-}
 </style>
 </head>
 <body>
 <div id="app">
+ <div id="screen">
+  <section id="clockCard" class="card">
+    <svg id="analog" viewBox="-50 -50 100 100" aria-hidden="true">
+      <circle class="face" r="48"></circle>
+      <g id="ticks"></g>
+      <line id="hHand" class="hand" y2="-24" stroke-width="4"></line>
+      <line id="mHand" class="hand" y2="-36" stroke-width="2.5"></line>
+      <line id="sHand" class="hand sec" y1="8" y2="-40"></line>
+      <circle class="pin" r="2.5"></circle>
+    </svg>
+    <div id="digital"><div class="hm"><span id="clockHM">--:--</span><small id="clockS">--</small></div><div class="date" id="clockDate"></div></div>
+  </section>
+
   <section id="now" class="card">
-    <div class="place"><b id="placeName"></b><span id="clock">--:--</span></div>
+    <div class="place"><b id="placeName"></b></div>
     <div class="icon" id="nowIcon">⏳</div>
     <div>
       <div class="temp"><span id="nowTemp">--</span><small>°C</small></div>
@@ -216,6 +248,7 @@ body {
     </div>
     <div id="windLegend"></div>
   </section>
+ </div>
 
   <section id="weekly" class="card">
     <h2><span>週間予報</span><span>最高 / 最低・降水・風</span></h2>
@@ -778,11 +811,29 @@ async function refreshRadar() {
   }
 }
 
+// ---- 時計（アナログとデジタル） ----
+$('ticks').innerHTML = Array.from({ length: 60 }, (_, i) => {
+  const major = i % 5 === 0;
+  return `<line class="tick${major ? ' major' : ''}" y1="-45" y2="${major ? -39 : -42}" transform="rotate(${i * 6})"></line>`;
+}).join('');
 function tickClock() {
   const d = new Date();
-  $('clock').textContent = `${d.getMonth() + 1}/${d.getDate()}(${WDAY[d.getDay()]}) ${hhmm(d)}`;
-  setTimeout(tickClock, 60000 - d.getSeconds() * 1000 - d.getMilliseconds() + 50);
+  const s = d.getSeconds(), m = d.getMinutes(), h = d.getHours();
+  $('sHand').setAttribute('transform', `rotate(${s * 6})`);
+  $('mHand').setAttribute('transform', `rotate(${(m + s / 60) * 6})`);
+  $('hHand').setAttribute('transform', `rotate(${((h % 12) + m / 60) * 30})`);
+  $('clockHM').textContent = hhmm(d);
+  $('clockS').textContent = pad(s);
+  $('clockDate').textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${WDAY[d.getDay()]}）`;
+  setTimeout(tickClock, 1000 - d.getMilliseconds() + 20);
 }
+
+// 週間予報を見るためにスクロールしたら、1 分後に先頭へ戻す
+let pageResetTimer;
+window.addEventListener('scroll', () => {
+  clearTimeout(pageResetTimer);
+  if (window.scrollY > 0) pageResetTimer = setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), CHART_RESET_MS);
+}, { passive: true });
 
 // 画面の自動消灯を防ぐ（Safari では画面タップ後に有効になる場合がある）
 let wakeLock = null;
