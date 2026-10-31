@@ -272,7 +272,7 @@ const CONFIG = {
   radarInterval: 5 * 60 * 1000,
   windInterval: 10 * 60 * 1000,
   retryInterval: 2 * 60 * 1000,
-  reloadInterval: 6 * 60 * 60 * 1000, // 長時間放置時のメモリ対策としてページを再読み込みする
+  reloadInterval: 4 * 60 * 60 * 1000, // 長時間放置時のメモリ対策としてページを再読み込みする
   radarZoom: parseInt(params.get('zoom'), 10) || 9,
 };
 document.documentElement.dataset.theme = CONFIG.theme;
