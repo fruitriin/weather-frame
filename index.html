@@ -465,7 +465,7 @@ $('chartBox').addEventListener('scroll', () => {
 // 気象庁ホームページの「雨雲の動き」「今後の雨」と同じタイルを使う。公開 API ではないため、仕様が変わると表示されなくなる可能性がある
 const JMA = 'https://www.jma.go.jp/bosai/jmatile/data';
 const RADAR = { pastMinutes: 120, step: 10, opacity: 0.8, frameMs: 700, endPauseMs: 2500, resumeMs: 60 * 1000 };
-let map, radarLayers = [], radarFrames = [], radarIdx = 0, radarNowIdx = 0;
+let map, radarLayers = new Map(), radarFrames = [], radarIdx = 0, radarNowIdx = 0; // radarLayers は地図に載せているコマ（URL → レイヤー）
 let radarTimer = null, radarPlaying = false, radarResumeTimer = null, radarTouchedAt = 0;
 let panelMode = 'rain'; // 地図に出しているもの。'rain'（雨雲）か 'wind'（風）
 
@@ -473,6 +473,7 @@ function initMap() {
   map = L.map('map', {
     zoomControl: false, attributionControl: true,
     dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false, boxZoom: false, keyboard: false,
+    fadeAnimation: false, zoomAnimation: false, markerZoomAnimation: false, // 地図は動かさないのでアニメーションは使わない
   }).setView([CONFIG.lat, CONFIG.lon], CONFIG.radarZoom);
   L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
     maxZoom: 14, className: 'basemap',
@@ -536,17 +537,31 @@ async function buildRadarFrames() {
   return { frames, nowIdx: frames.findIndex((f) => f.t.getTime() === nowT.getTime()) };
 }
 
+// 長時間表示してもメモリを使いすぎないよう、地図に載せるのは待機中は表示中の 1 コマだけにする。全コマを読み込むのは再生するときだけ
+function radarLayerFor(i) {
+  const url = radarFrames[i].url;
+  let layer = radarLayers.get(url);
+  if (!layer) {
+    // 気象庁の雨雲タイルは偶数ズーム（4・6・8・10）にしかデータがない。奇数ズームでは 1 段下のタイルを 2 倍にして使う
+    const odd = map.getZoom() % 2 === 1;
+    const tileOpt = odd ? { tileSize: 512, zoomOffset: -1, maxNativeZoom: 11 } : { maxNativeZoom: 10 };
+    layer = L.tileLayer(url, { ...tileOpt, opacity: 0, zIndex: 10, className: 'rain' }).addTo(map);
+    radarLayers.set(url, layer);
+  }
+  return layer;
+}
+function pruneRadarLayers(keepUrl) {
+  radarLayers.forEach((layer, url) => {
+    if (url === keepUrl) return;
+    map.removeLayer(layer);
+    radarLayers.delete(url);
+  });
+}
+
 async function updateRadar() {
   // 風を表示している間は読み込まない。再生中や操作中に作り直すと位置が飛ぶので、次回に回す
   if (panelMode !== 'rain' || radarPlaying || Date.now() - radarTouchedAt < RADAR.resumeMs) return;
   const { frames, nowIdx } = await buildRadarFrames();
-  radarLayers.forEach((l) => map.removeLayer(l));
-  // 気象庁の雨雲タイルは偶数ズーム（4・6・8・10）にしかデータがない。奇数ズームでは 1 段下のタイルを 2 倍にして使う
-  const odd = map.getZoom() % 2 === 1;
-  const tileOpt = odd ? { tileSize: 512, zoomOffset: -1, maxNativeZoom: 11 } : { maxNativeZoom: 10 };
-  radarLayers = frames.map((f) => L.tileLayer(f.url, {
-    ...tileOpt, opacity: 0, zIndex: 10, className: 'rain',
-  }).addTo(map));
   radarFrames = frames;
   radarNowIdx = nowIdx;
   setupSeek();
@@ -582,12 +597,18 @@ function setupSeek() {
 }
 
 function showRadarFrame(idx) {
-  const n = radarLayers.length;
-  if (!n) return;
+  const n = radarFrames.length;
+  if (!n || panelMode !== 'rain') return;
   radarIdx = Math.max(0, Math.min(idx, n - 1));
-  radarLayers.forEach((l, i) => l.setOpacity(i === radarIdx ? RADAR.opacity : 0));
-  if (panelMode !== 'rain') return;
   const f = radarFrames[radarIdx];
+  const layer = radarLayerFor(radarIdx);
+  // 読み込みが終わるまでは前のコマを出しておき、更新のたびに雨雲が消えて見えないようにする
+  const reveal = () => {
+    if (radarFrames[radarIdx]?.url !== f.url) return;
+    radarLayers.forEach((l, url) => l.setOpacity(url === f.url ? RADAR.opacity : 0));
+    if (!radarPlaying && !radarTouchedAt) pruneRadarLayers(f.url);
+  };
+  if (layer.isLoading()) layer.once('load', reveal); else reveal();
   $('radarTime').textContent = `${pad(f.t.getHours())}:${pad(f.t.getMinutes())}（${relLabel(f.t)}）`;
   const kind = $('radarKind');
   kind.textContent = f.kind === 'past' ? (radarIdx === radarNowIdx ? '実況・最新' : '実況') : f.kind === 'nowcast' ? '予報（ナウキャスト）' : '予報（降水短時間予報）';
@@ -597,23 +618,31 @@ function showRadarFrame(idx) {
 
 // ふだんは「今」のコマで止めておき、タップされたら 2 時間前から予報の終わりまでを 1 回再生する
 function playRadar() {
-  if (!radarLayers.length) return;
+  if (!radarFrames.length) return;
   clearTimeout(radarTimer);
   clearTimeout(radarResumeTimer);
   // 一時停止やシークの直後は止めた位置から続け、それ以外（待機中・最後のコマ）は最初から再生する
-  const resume = radarTouchedAt && radarIdx < radarLayers.length - 1;
+  const resume = radarTouchedAt && radarIdx < radarFrames.length - 1;
   radarTouchedAt = 0;
   radarPlaying = true;
   $('radarPlay').textContent = '❚❚';
+  radarFrames.forEach((_, i) => radarLayerFor(i));
   if (!resume) showRadarFrame(0);
+  // 次のコマの読み込みを少し待ってから進める（読み込めないタイルがあっても止まらないよう、3 秒で打ち切る）
+  const advance = (tries = 0) => {
+    if (radarLayerFor(radarIdx + 1).isLoading() && tries < 30) {
+      radarTimer = setTimeout(() => advance(tries + 1), 100);
+      return;
+    }
+    showRadarFrame(radarIdx + 1);
+    step();
+  };
   const step = () => {
-    const atEnd = radarIdx >= radarLayers.length - 1;
+    const atEnd = radarIdx >= radarFrames.length - 1;
     // 「今」のコマと最後のコマは少し長く見せる
     const wait = atEnd ? RADAR.endPauseMs : radarIdx === radarNowIdx ? RADAR.endPauseMs / 2 : RADAR.frameMs;
     radarTimer = setTimeout(() => {
-      if (atEnd) { resetRadar(); return; }
-      showRadarFrame(radarIdx + 1);
-      step();
+      if (atEnd) resetRadar(); else advance();
     }, wait);
   };
   step();
@@ -654,7 +683,7 @@ const WIND_LEVELS = [ // [この風速以上, 色, 凡例]
   [3, 'var(--wind)', '3〜6'],
   [0, 'var(--text)', '〜3'],
 ];
-let amedasTable = null, windObs = null, windTime = null, windLayer = null;
+let amedasTable = null, windObs = null, windTime = null, windKey = null, windLayer = null;
 let amedasRain = false; // 最寄りの観測点で雨が降っているか
 
 $('windLegend').innerHTML = WIND_LEVELS.slice().reverse()
@@ -666,7 +695,9 @@ async function fetchWind() {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const t = (await res.text()).trim(); // "2026-10-24T17:40:00+09:00"
   const key = t.slice(0, 4) + t.slice(5, 7) + t.slice(8, 10) + t.slice(11, 13) + t.slice(14, 16) + '00';
+  if (key === windKey) return; // 観測がまだ更新されていなければ何もしない
   windObs = await getJson(`${AMEDAS}/data/map/${key}.json`);
+  windKey = key;
   windTime = new Date(t);
 
   // 最寄りの観測点（20km 以内）の 10 分間・1 時間降水量で、いま雨が降っているかを見る
@@ -685,8 +716,9 @@ async function fetchWind() {
 function stationLatLng(s) { return [s.lat[0] + s.lat[1] / 60, s.lon[0] + s.lon[1] / 60]; }
 
 function drawWind() {
-  if (!map || !windObs) return;
-  if (windLayer) map.removeLayer(windLayer);
+  if (windLayer) { map.removeLayer(windLayer); windLayer = null; }
+  // 矢印を作るのは風を表示している間だけにする
+  if (!map || !windObs || panelMode !== 'wind') return;
   const bounds = map.getBounds().pad(0.2);
   const markers = [];
   for (const [id, o] of Object.entries(windObs)) {
@@ -707,7 +739,7 @@ function drawWind() {
     }));
   }
   windLayer = L.layerGroup(markers).addTo(map);
-  if (panelMode === 'wind') showWindHeader();
+  showWindHeader();
 }
 
 function showWindHeader() {
@@ -761,8 +793,11 @@ function setPanelMode(mode) {
     pauseRadar();
     clearTimeout(radarResumeTimer);
     radarTouchedAt = 0;
+    pruneRadarLayers(null); // 雨雲は隠れるので、地図から外してメモリを空ける
+    drawWind();
     showWindHeader();
   } else {
+    drawWind();
     showRadarFrame(radarNowIdx);
     refreshRadar(); // 風を出している間は更新していないので、ここで取り直す
   }
@@ -822,9 +857,12 @@ function tickClock() {
   $('sHand').setAttribute('transform', `rotate(${s * 6})`);
   $('mHand').setAttribute('transform', `rotate(${(m + s / 60) * 6})`);
   $('hHand').setAttribute('transform', `rotate(${((h % 12) + m / 60) * 30})`);
-  $('clockHM').textContent = hhmm(d);
   $('clockS').textContent = pad(s);
-  $('clockDate').textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${WDAY[d.getDay()]}）`;
+  // 分と日付は変わったときだけ書き換える（スリープ明けなどで 0 秒を通らないことがあるので、値を比べる）
+  if ($('clockHM').textContent !== hhmm(d)) {
+    $('clockHM').textContent = hhmm(d);
+    $('clockDate').textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${WDAY[d.getDay()]}）`;
+  }
   setTimeout(tickClock, 1000 - d.getMilliseconds() + 20);
 }
 
@@ -866,7 +904,13 @@ refreshForecast();
 refreshRadar();
 refreshWind();
 keepAwake();
-setTimeout(() => { if (navigator.onLine) location.reload(); }, CONFIG.reloadInterval);
+// 定期的な再読み込み。オフラインや操作中はあとへ回す。スリープ中はタイマーが止まるので、経過時間は時刻で測る
+const loadedAt = Date.now();
+setInterval(() => {
+  if (Date.now() - loadedAt < CONFIG.reloadInterval || !navigator.onLine) return;
+  if (radarPlaying || Date.now() - radarTouchedAt < RADAR.resumeMs) return;
+  location.reload();
+}, 60 * 1000);
 </script>
 </body>
 </html>
