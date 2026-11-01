@@ -86,11 +86,9 @@ body {
 #analog .tick { stroke: var(--muted); stroke-width: 1; }
 #analog .tick.major { stroke: var(--text); stroke-width: 2.5; }
 #analog .hand { stroke: var(--text); stroke-linecap: round; }
-#analog .sec { stroke: var(--temp); stroke-width: 1.2; }
 #analog .pin { fill: var(--temp); }
 #digital { flex: 1; min-width: 0; text-align: center; }
 #digital .hm { font-size: 52px; font-weight: 300; line-height: 1; letter-spacing: .02em; }
-#digital .hm small { font-size: 22px; color: var(--muted); margin-left: 2px; }
 #digital .date { font-size: 14px; color: var(--muted); margin-top: 6px; }
 
 /* 現在 */
@@ -205,10 +203,9 @@ body {
       <g id="ticks"></g>
       <line id="hHand" class="hand" y2="-24" stroke-width="4"></line>
       <line id="mHand" class="hand" y2="-36" stroke-width="2.5"></line>
-      <line id="sHand" class="hand sec" y1="8" y2="-40"></line>
       <circle class="pin" r="2.5"></circle>
     </svg>
-    <div id="digital"><div class="hm"><span id="clockHM">--:--</span><small id="clockS">--</small></div><div class="date" id="clockDate"></div></div>
+    <div id="digital"><div class="hm"><span id="clockHM">--:--</span></div><div class="date" id="clockDate"></div></div>
   </section>
 
   <section id="now" class="card">
@@ -853,17 +850,12 @@ $('ticks').innerHTML = Array.from({ length: 60 }, (_, i) => {
 }).join('');
 function tickClock() {
   const d = new Date();
-  const s = d.getSeconds(), m = d.getMinutes(), h = d.getHours();
-  $('sHand').setAttribute('transform', `rotate(${s * 6})`);
-  $('mHand').setAttribute('transform', `rotate(${(m + s / 60) * 6})`);
+  const m = d.getMinutes(), h = d.getHours();
+  $('mHand').setAttribute('transform', `rotate(${m * 6})`);
   $('hHand').setAttribute('transform', `rotate(${((h % 12) + m / 60) * 30})`);
-  $('clockS').textContent = pad(s);
-  // 分と日付は変わったときだけ書き換える（スリープ明けなどで 0 秒を通らないことがあるので、値を比べる）
-  if ($('clockHM').textContent !== hhmm(d)) {
-    $('clockHM').textContent = hhmm(d);
-    $('clockDate').textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${WDAY[d.getDay()]}）`;
-  }
-  setTimeout(tickClock, 1000 - d.getMilliseconds() + 20);
+  $('clockHM').textContent = hhmm(d);
+  $('clockDate').textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${WDAY[d.getDay()]}）`;
+  setTimeout(tickClock, 60000 - d.getSeconds() * 1000 - d.getMilliseconds() + 50);
 }
 
 // 週間予報を見るためにスクロールしたら、1 分後に先頭へ戻す
